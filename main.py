@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Query, Response, Header
 from duckduckgo_search import DDGS
 from typing import Optional
 
+# ==================== FastAPI 应用实例（必须在最顶层） ====================
 app = FastAPI(
     title="AI Agent 统一搜索网关",
     description="聚合 Tavily、Jina 和 DDG 的搜索服务"
@@ -11,11 +12,10 @@ app = FastAPI(
 
 # ================= 安全配置 =================
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")   # ← 新增
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
 
-# 如果没有设置密钥，发出警告
 if not API_SECRET_KEY:
-    print("⚠️ 警告：API_SECRET_KEY 未设置，接口处于公开状态，存在被刷风险！")
+    print("⚠️ 警告：API_SECRET_KEY 未设置，接口处于公开状态！")
 
 class AgentSearchAggregator:
     def __init__(self, tavily_key: str):
@@ -98,4 +98,30 @@ async def root():
 @app.get("/search")
 async def api_search(
     response: Response,
-   
+    q: str = Query(..., description="搜索关键词"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None)
+):
+    # API Key 验证
+    provided_key = None
+    if x_api_key:
+        provided_key = x_api_key
+    elif authorization and authorization.startswith("Bearer "):
+        provided_key = authorization[7:].strip()
+
+    if API_SECRET_KEY and provided_key != API_SECRET_KEY:
+        raise HTTPException(status_code=401, detail="未授权访问：API Key 无效")
+
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    result = await aggregator.aggregate_search(q)
+
+    if "❌" not in result and len(result) > 100:
+        response.headers["Cache-Control"] = "public, s-maxage=600, stale-while-revalidate=120"
+
+    return {
+        "query": q,
+        "strategy": "tavily" if "Tavily" in result else "fallback",
+        "result": result
+    }
